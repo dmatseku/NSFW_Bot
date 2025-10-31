@@ -9,8 +9,6 @@ use GuzzleHttp\Exception\GuzzleException;
 use Revolt\EventLoop;
 use Amp\SignalException;
 
-// ===== Инициализация окружения =====
-
 $dotenv = Dotenv::createImmutable(__DIR__ . '/..');
 $dotenv->safeLoad();
 
@@ -37,8 +35,6 @@ if (!$API_ID || !$API_HASH || !$DISCORD_WEBHOOK) {
     exit(1);
 }
 
-// ===== Аргументы командной строки =====
-
 $opts = getopt('', ['channel::', 'since::', 'limit::', 'from-id::', 'checkpoint::']);
 $channelArg = $opts['channel'] ?? ($_ENV['EXPORT_CHANNEL'] ?? null);
 $sinceArg = $opts['since'] ?? null;
@@ -54,8 +50,6 @@ if (!$channelArg) {
 $sinceTs = $sinceArg ? (ctype_digit($sinceArg) ? (int)$sinceArg : strtotime($sinceArg)) : 0;
 if ($sinceTs === false) $sinceTs = 0;
 
-// ===== Подготовка директорий и клиента =====
-
 $varDir = __DIR__ . '/../var';
 $tmpDir = $varDir . '/tmp';
 @mkdir($varDir, 0750, true);
@@ -68,12 +62,11 @@ $settings->setApiHash($API_HASH);
 $mp = new \danog\MadelineProto\API($sessionFile, $settings);
 $mp->start();
 
+$mp->getDialogs();
 $peer = $mp->getId($channelArg);
 
 $http = new Client(['timeout' => 30.0]);
 $maxBytes = $DISCORD_MAX_MB * 1024 * 1024;
-
-// ===== Вспомогательные функции =====
 
 function saveCheckpoint(string $file, int $id): void {
     @file_put_contents($file, (string)$id, LOCK_EX);
@@ -142,22 +135,21 @@ function sendSingle(Client $http, string $webhook, string $filename, string $pat
 }
 
 function findStartMinId(\danog\MadelineProto\API $mp, $peer, int $sinceTs = 0): int {
-    $maxId = 0;
+    $offsetId = 0;
     $globalOldest = PHP_INT_MAX;
     $sinceCandidate = PHP_INT_MAX;
 
     while (true) {
         $batch = $mp->messages->getHistory([
-            'peer' => $peer,
-            'offset_id' => 0,
+            'peer'        => $peer,
+            'offset_id'   => $offsetId,
             'offset_date' => 0,
-            'add_offset' => 0,
-            'limit' => 100,
-            'max_id' => $maxId,
-            'min_id' => 0,
-            'hash' => 0,
+            'add_offset'  => 0,
+            'limit'       => 100,
+            'max_id'      => 0,
+            'min_id'      => 0,
+            'hash'        => 0,
         ]);
-
         if (empty($batch['messages'])) break;
 
         $minIdInBatch = PHP_INT_MAX;
@@ -181,18 +173,15 @@ function findStartMinId(\danog\MadelineProto\API $mp, $peer, int $sinceTs = 0): 
         }
 
         if ($sinceTs > 0 && $allOlderThanSince) break;
-        if ($minIdInBatch === PHP_INT_MAX || $minIdInBatch <= 1) break;
 
-        $maxId = $minIdInBatch - 1;
-        if (count($batch['messages']) < 100) break;
+        if ($minIdInBatch === PHP_INT_MAX || $minIdInBatch <= 1) break;
+        $offsetId = $minIdInBatch;
     }
 
     if ($sinceTs > 0 && $sinceCandidate !== PHP_INT_MAX) return $sinceCandidate - 1;
     if ($globalOldest !== PHP_INT_MAX) return $globalOldest - 1;
     return 0;
 }
-
-// ===== Логика экспорта =====
 
 $periodStart = time();
 $groupsInWindow = 0;
@@ -211,20 +200,19 @@ if ($fromIdArg <= 0 && !is_file($checkpoint)) {
 $startFromId = $fromIdArg > 0 ? $fromIdArg : (loadCheckpoint($checkpoint) ?: $autoStartMinId);
 if ($startFromId > 0) echo "resume_from_id: {$startFromId}\n";
 
+$http = new Client(['timeout' => 30.0]);
 $lastIdProcessed = $startFromId;
-
-// ===== Основной цикл =====
 
 do {
     $batch = $mp->messages->getHistory([
-        'peer' => $peer,
-        'offset_id' => 0,
+        'peer'        => $peer,
+        'offset_id'   => 0,
         'offset_date' => 0,
-        'add_offset' => 0,
-        'limit' => 100,
-        'max_id' => 0,
-        'min_id' => $lastIdProcessed,
-        'hash' => 0,
+        'add_offset'  => 0,
+        'limit'       => 100,
+        'max_id'      => 0,
+        'min_id'      => $lastIdProcessed,
+        'hash'        => 0,
     ]);
     if (empty($batch['messages'])) break;
 
